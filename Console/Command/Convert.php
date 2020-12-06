@@ -11,6 +11,7 @@ use Magento\CloudPatches\Patch\Collector\QualityCollector;
 use Magento\CloudPatches\Patch\Data\PatchInterface;
 use Magento\CloudPatches\Patch\Status\StatusPool;
 use Magento\Framework\App\Filesystem\DirectoryList;
+use Magento\Framework\App\ProductMetadata;
 use Magento\Framework\Exception\FileSystemException;
 use Magento\Framework\Filesystem;
 use Magento\Framework\Serialize\Serializer\Json;
@@ -41,6 +42,10 @@ class Convert extends Command
      */
     public $filesystem;
     /**
+     * @var ProductMetadata
+     */
+    public $productMetadata;
+    /**
      * @var InputInterface
      */
     protected $input;
@@ -66,18 +71,21 @@ class Convert extends Command
      * @param Json $json
      * @param DirectoryList $directoryList
      * @param Filesystem $filesystem
+     * @param ProductMetadata $productMetadata
      * @param string|null $name
      */
     public function __construct(
         Json $json,
         DirectoryList $directoryList,
         Filesystem $filesystem,
+        ProductMetadata $productMetadata,
         string $name = null
     ) {
         parent::__construct($name);
         $this->json = $json;
         $this->directoryList = $directoryList;
         $this->filesystem = $filesystem;
+        $this->productMetadata = $productMetadata;
     }
 
     /**
@@ -130,6 +138,7 @@ class Convert extends Command
             if (
                 $patchData['patchId']
                 && $patchData['status']
+                && $patchData['status'] !== StatusPool::NA
                 && $patchData['type']
                 && $patchData['type'] !== QualityCollector::PROP_DEPRECATED
             ) {
@@ -139,8 +148,18 @@ class Convert extends Command
             }
         }
 
-        $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile(self::COMPOSER_QUALITY_PATCHES_JSON, $this->encodeJson(['patches' => $this->outputArray]));
-        $this->output->writeln('<info>Created ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' file with quality patches structure for usage with vaimo/composer-patches package</info>');
+        try {
+            $currentComposerQualityPatches = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile(self::COMPOSER_QUALITY_PATCHES_JSON));
+        } catch (\Exception $e) {
+            $currentComposerQualityPatches = [];
+        }
+        if ($this->arraysDiffer($currentComposerQualityPatches, ['patches' => $this->outputArray])) {
+            $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile(self::COMPOSER_QUALITY_PATCHES_JSON, $this->encodeJson(['patches' => $this->outputArray]));
+            $this->output->writeln('<info>Created ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' file with Quality Patches structure for usage with vaimo/composer-patches package</info>');
+            $this->output->writeln('<comment>Now run \'composer patch:apply\' to apply the patches locally.');
+        } else {
+            $this->output->writeln('<comment>No Quality Patches to update.</comment>');
+        }
 
         $this->addQualityPatchesJsonToRootComposerJson();
         $this->installPostUpdateCmd();
@@ -152,7 +171,7 @@ class Convert extends Command
     protected function configure()
     {
         $this->setName('elgentos:quality-patches:convert');
-        $this->setDescription('Convert composer quality patches');
+        $this->setDescription('Convert Quality Patches to Composer patches');
         parent::configure();
     }
 
@@ -210,7 +229,7 @@ class Convert extends Command
      */
     private function getAffectedComponents(string $patch): array
     {
-        preg_match_all('/(magento\/module-[a-z\-]*)/', $patch, $components);
+        preg_match_all('/(magento\/[a-z\-]*)/', $patch, $components);
         if (isset($components[0])) {
             return $components[0];
         }
@@ -224,10 +243,20 @@ class Convert extends Command
     private function getFileAndDescriptionFromPatchesJson(?string $patchId): array
     {
         if (isset($this->patchesJsonContent[$patchId])) {
-            $package = array_key_first($this->patchesJsonContent[$patchId]);
+            $packageKeys = array_keys($this->patchesJsonContent[$patchId]);
+            $package = $packageKeys[0];
             $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
             $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
             $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
+
+            // See if the file found matches for the current Magento edition (Community or Commerce)
+            // If it doesn't match, see if there is another patch listed for the other edition
+            if (substr($file, 0, strlen($this->getEdition())) !== $this->getEdition()) {
+                $package = $packageKeys[1];
+                $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
+                $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
+                $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
+            }
             $file = './vendor/magento/quality-patches/patches/' . $file;
             return [$file, $description];
         }
@@ -239,15 +268,25 @@ class Convert extends Command
      */
     private function addPatchDataToOutputArray(array $patchData)
     {
+        $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['description'];
         if (count($patchData['affected_components']) === 1) {
-            $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['description'];
             $module = $patchData['affected_components'][0];
-            $this->outputArray[$module] = [$patchName => [
+            if (!isset($this->outputArray[$module])) {
+                $this->outputArray[$module] = [];
+            }
+            $this->outputArray[$module][$patchName] = [
                 'source' => $patchData['file'],
                 'level' => $this->getLevel()
-            ]];
-        } else {
-            // @TODO not implemented yet
+            ];
+        } elseif($patchData['affected_components'] > 1) {
+            if (!isset($this->outputArray['*'])) {
+                $this->outputArray['*'] = [];
+            }
+            $this->outputArray['*'][$patchName] = [
+                'source' => $patchData['file'],
+                'level' => $this->getLevelBundles(),
+                'targets' => $patchData['affected_components']
+            ];
         }
     }
 
@@ -257,6 +296,16 @@ class Convert extends Command
     private function getLevel(): int
     {
         return 4;
+    }
+
+    /**
+     * @return int
+     *
+     * See https://github.com/vaimo/composer-patches/issues/25#issuecomment-477592481
+     */
+    private function getLevelBundles(): int
+    {
+        return 2;
     }
 
     /**
@@ -276,7 +325,7 @@ class Convert extends Command
                 $rootComposerJson['extra']['patches-file'][] = self::COMPOSER_QUALITY_PATCHES_JSON;
             }
         }
-        if (strcmp($this->json->serialize($originalRootComposerJson), $this->json->serialize($rootComposerJson)) !== 0) {
+        if ($this->arraysDiffer($rootComposerJson, $originalRootComposerJson)) {
             $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile('composer.json', $this->encodeJson($rootComposerJson));
             $this->output->writeln('<comment>Added ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' to extra.patches-file key in composer.json</comment>');
         }
@@ -303,5 +352,23 @@ class Convert extends Command
      */
     private function encodeJson(array $data) {
         return json_encode($data, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES);
+    }
+
+    /**
+     * @param $array1
+     * @param $array2
+     * @return bool
+     */
+    private function arraysDiffer($array1, $array2): bool
+    {
+        return strcmp($this->json->serialize($array1), $this->json->serialize($array2)) !== 0;
+    }
+
+    /**
+     * @return string
+     */
+    private function getEdition(): string
+    {
+        return $this->productMetadata->getEdition() === 'Community' ? 'os' : 'commerce';
     }
 }
