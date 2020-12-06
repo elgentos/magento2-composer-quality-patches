@@ -1,0 +1,31 @@
+{
+    "name": "elgentos/magento2-composer-quality-patches",
+    "description": "",
+    "require": {
+        "php": "^7.0",
+        "magento/magento-composer-installer": "*",
+        "magento/quality-patches": "*",
+        "vaimo/composer-patches": "*"
+    },
+    "type": "magento2-module",
+    "version": "0.1.0",
+    "license": [
+
+    ],
+    "autoload": {
+        "files": [
+            "registration.php"
+        ],
+        "psr-4": {
+            "Elgentos\\ComposerQualityPatches\\": ""
+        }
+    },
+    "extra": {
+        "map": [
+            [
+                "*",
+                "Elgentos/ComposerQualityPatches"
+            ]
+        ]
+    }
+}
