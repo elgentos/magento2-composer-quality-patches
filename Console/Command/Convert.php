@@ -7,11 +7,16 @@ declare(strict_types=1);
 
 namespace Elgentos\ComposerQualityPatches\Console\Command;
 
+use Magento\CloudPatches\Patch\Collector\QualityCollector;
+use Magento\CloudPatches\Patch\Data\PatchInterface;
+use Magento\CloudPatches\Patch\Status\StatusPool;
+use Magento\Framework\App\Filesystem\DirectoryList;
+use Magento\Framework\Exception\FileSystemException;
+use Magento\Framework\Filesystem;
+use Magento\Framework\Serialize\Serializer\Json;
 use Symfony\Component\Process\Process;
 use Symfony\Component\Console\Command\Command;
-use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
-use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 
 /**
@@ -21,11 +26,20 @@ use Symfony\Component\Console\Output\OutputInterface;
 class Convert extends Command
 {
     const DIVIDER = '─────────────';
-    const NOT_APPLIED = 'Not Applied';
-    const NOT_APPLICABLE = 'N/A';
-    const APPLIED = 'Applied';
     const COMPOSER_QUALITY_PATCHES_JSON = 'composer.quality-patches.json';
 
+    /**
+     * @var Json
+     */
+    public $json;
+    /**
+     * @var DirectoryList
+     */
+    public $directoryList;
+    /**
+     * @var Filesystem
+     */
+    public $filesystem;
     /**
      * @var InputInterface
      */
@@ -38,17 +52,37 @@ class Convert extends Command
      * @var array
      */
     protected $data = [];
-    protected $version = 'os';
     /**
      * @var mixed
      */
     protected $patchesJsonContent;
+    /**
+     * @var array
+     */
     protected $outputArray = [];
+
+    /**
+     * Convert constructor.
+     * @param Json $json
+     * @param DirectoryList $directoryList
+     * @param Filesystem $filesystem
+     * @param string|null $name
+     */
+    public function __construct(
+        Json $json,
+        DirectoryList $directoryList,
+        Filesystem $filesystem,
+        string $name = null
+    ) {
+        parent::__construct($name);
+        $this->json = $json;
+        $this->directoryList = $directoryList;
+        $this->filesystem = $filesystem;
+    }
 
     /**
      * @param InputInterface $input
      * @param OutputInterface $output
-     * @throws \Magento\CloudPatches\Shell\PackageNotFoundException
      */
     protected function execute(
         InputInterface $input,
@@ -63,7 +97,7 @@ class Convert extends Command
         $output = $process->getOutput();
         $lines = explode(PHP_EOL, $output);
 
-        $this->patchesJsonContent = json_decode(file_get_contents('./vendor/magento/quality-patches/patches.json'), true);
+        $this->patchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/patches.json'));
 
         $patches = [];
         $patch = '';
@@ -97,7 +131,7 @@ class Convert extends Command
                 $patchData['patchId']
                 && $patchData['status']
                 && $patchData['type']
-                && $patchData['type'] !== \Magento\CloudPatches\Patch\Collector\QualityCollector::PROP_DEPRECATED
+                && $patchData['type'] !== QualityCollector::PROP_DEPRECATED
             ) {
                 $patchData['affected_components'] = $this->getAffectedComponents($patch);
                 list($patchData['file'], $patchData['description']) = $this->getFileAndDescriptionFromPatchesJson($patchData['patchId']);
@@ -105,16 +139,11 @@ class Convert extends Command
             }
         }
 
-        file_put_contents(self::COMPOSER_QUALITY_PATCHES_JSON, json_encode(['patches' => $this->outputArray], JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES));
-        $this->output->writeln('Created ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' file with quality patches structure for usage with vaimo/composer-patches package');
+        $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile(self::COMPOSER_QUALITY_PATCHES_JSON, $this->encodeJson(['patches' => $this->outputArray]));
+        $this->output->writeln('<info>Created ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' file with quality patches structure for usage with vaimo/composer-patches package</info>');
 
-        $rootComposerJson = json_decode(file_get_contents('composer.json'), true);
-        if (!isset($rootComposerJson['extra']['patches-file']) || !in_array(self::COMPOSER_QUALITY_PATCHES_JSON, $rootComposerJson['extra']['patches-file'])) {
-            $rootComposerJson['extra']['patches-file'][] = self::COMPOSER_QUALITY_PATCHES_JSON;
-            file_put_contents('composer.json', json_encode($rootComposerJson));
-            $this->output->writeln('Added ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' to extra.patches-file key in composer.json');
-        }
-
+        $this->addQualityPatchesJsonToRootComposerJson();
+        $this->installPostUpdateCmd();
     }
 
     /**
@@ -122,8 +151,8 @@ class Convert extends Command
      */
     protected function configure()
     {
-        $this->setName("elgentos:quality-patches:convert");
-        $this->setDescription("Convert composer quality patches");
+        $this->setName('elgentos:quality-patches:convert');
+        $this->setDescription('Convert composer quality patches');
         parent::configure();
     }
 
@@ -143,9 +172,9 @@ class Convert extends Command
     private function getStatus(string $patch): ?string
     {
         $statuses = [
-            \Magento\CloudPatches\Patch\Status\StatusPool::NOT_APPLIED,
-            \Magento\CloudPatches\Patch\Status\StatusPool::APPLIED,
-            \Magento\CloudPatches\Patch\Status\StatusPool::NA,
+            StatusPool::NOT_APPLIED,
+            StatusPool::APPLIED,
+            StatusPool::NA,
         ];
         foreach ($statuses as $status) {
             if (stripos($patch, $status) !== false) {
@@ -162,10 +191,10 @@ class Convert extends Command
     private function getType(string $patch): ?string
     {
         $types = [
-            \Magento\CloudPatches\Patch\Collector\QualityCollector::PROP_DEPRECATED,
-            \Magento\CloudPatches\Patch\Data\PatchInterface::TYPE_OPTIONAL,
-            \Magento\CloudPatches\Patch\Data\PatchInterface::TYPE_REQUIRED,
-            \Magento\CloudPatches\Patch\Data\PatchInterface::TYPE_CUSTOM,
+            QualityCollector::PROP_DEPRECATED,
+            PatchInterface::TYPE_OPTIONAL,
+            PatchInterface::TYPE_REQUIRED,
+            PatchInterface::TYPE_CUSTOM,
         ];
         foreach ($types as $type) {
             if (stripos($patch, $type) !== false) {
@@ -186,12 +215,6 @@ class Convert extends Command
             return $components[0];
         }
         return [];
-    }
-
-    private function findPatchFile(array $patchData)
-    {
-        print_r(glob('vendor/magento/quality-patches/patches/' . $this->version
-            .'/' . $patchData['patchId'] . '*'));
     }
 
     /**
@@ -224,13 +247,61 @@ class Convert extends Command
                 'level' => $this->getLevel()
             ]];
         } else {
-            // not implemented yet
+            // @TODO not implemented yet
         }
-
     }
 
+    /**
+     * @return int
+     */
     private function getLevel(): int
     {
         return 4;
+    }
+
+    /**
+     *
+     * @throws FileSystemException
+     */
+    private function addQualityPatchesJsonToRootComposerJson(): void
+    {
+        $originalRootComposerJson = $rootComposerJson = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('composer.json'));
+        if (!isset($rootComposerJson['extra']['patches-file'])) {
+            $rootComposerJson['extra']['patches-file'] = [self::COMPOSER_QUALITY_PATCHES_JSON];
+        } else {
+            $patchesFile = $rootComposerJson['extra']['patches-file'];
+            if (is_string($patchesFile)) {
+                $rootComposerJson['extra']['patches-file'] = [$patchesFile, self::COMPOSER_QUALITY_PATCHES_JSON];
+            } elseif (is_array($patchesFile) && !in_array(self::COMPOSER_QUALITY_PATCHES_JSON, $patchesFile)) {
+                $rootComposerJson['extra']['patches-file'][] = self::COMPOSER_QUALITY_PATCHES_JSON;
+            }
+        }
+        if (strcmp($this->json->serialize($originalRootComposerJson), $this->json->serialize($rootComposerJson)) !== 0) {
+            $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile('composer.json', $this->encodeJson($rootComposerJson));
+            $this->output->writeln('<comment>Added ' . self::COMPOSER_QUALITY_PATCHES_JSON . ' to extra.patches-file key in composer.json</comment>');
+        }
+    }
+
+    /**
+     *
+     * @throws FileSystemException
+     */
+    private function installPostUpdateCmd(): void
+    {
+        $rootComposerJson = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('composer.json'));
+        $command = 'bin/magento ' . $this->getName();
+        if (!isset($rootComposerJson['scripts']['post-update-cmd']) || !in_array($command, $rootComposerJson['scripts']['post-update-cmd'])) {
+            $rootComposerJson['scripts']['post-update-cmd'][] = $command;
+            $this->filesystem->getDirectoryWrite(DirectoryList::ROOT)->writeFile('composer.json', $this->encodeJson($rootComposerJson));
+            $this->output->writeln('<comment>' . $command . ' has been added as a post-update-cmd script in composer.json</comment>');
+        }
+    }
+
+    /**
+     * @param array $data
+     * @return false|string
+     */
+    private function encodeJson(array $data) {
+        return json_encode($data, JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES);
     }
 }

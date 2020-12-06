@@ -2,7 +2,7 @@
     "name": "elgentos/magento2-composer-quality-patches",
     "description": "",
     "require": {
-        "php": "^7.0",
+        "php": "^7.3",
         "magento/magento-composer-installer": "*",
         "magento/quality-patches": "*",
         "vaimo/composer-patches": "*"
