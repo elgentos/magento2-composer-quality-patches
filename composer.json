@@ -15,13 +15,5 @@
         "psr-4": {
             "Elgentos\\ComposerQualityPatches\\": ""
         }
-    },
-    "extra": {
-        "map": [
-            [
-                "*",
-                "Elgentos/ComposerQualityPatches"
-            ]
-        ]
     }
 }
