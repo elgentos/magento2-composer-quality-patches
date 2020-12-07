@@ -181,7 +181,7 @@ class Convert extends Command
      */
     protected function getPatchId(string $patch): ?string
     {
-        preg_match('/((MDVA|MC)-[0-9]{5}(-V[0-9]{1})?)/', $patch, $matches);
+        preg_match('/((BUNDLE|MDVA|MC)-[0-9]{5}(-V[0-9]{1})?)/', $patch, $matches);
         if (isset($matches[0])) {
             return $matches[0];
         }
