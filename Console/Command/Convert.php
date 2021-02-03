@@ -12,6 +12,9 @@ use Magento\CloudPatches\Patch\Data\PatchInterface;
 use Magento\CloudPatches\Patch\Status\StatusPool;
 use Magento\Framework\App\Filesystem\DirectoryList;
 use Magento\Framework\App\ProductMetadata;
+use Magento\Framework\Composer\ComposerFactory;
+use Magento\Framework\Composer\ComposerInformation;
+use Magento\Framework\Composer\ComposerJsonFinder;
 use Magento\Framework\Exception\FileSystemException;
 use Magento\Framework\Filesystem;
 use Magento\Framework\Serialize\Serializer\Json;
@@ -65,6 +68,10 @@ class Convert extends Command
      * @var array
      */
     protected $outputArray = [];
+    /**
+     * @var array
+     */
+    protected $installedPackages = [];
 
     /**
      * Convert constructor.
@@ -79,6 +86,7 @@ class Convert extends Command
         DirectoryList $directoryList,
         Filesystem $filesystem,
         ProductMetadata $productMetadata,
+        ComposerJsonFinder $composerJsonFinder,
         string $name = null
     ) {
         parent::__construct($name);
@@ -86,6 +94,7 @@ class Convert extends Command
         $this->directoryList = $directoryList;
         $this->filesystem = $filesystem;
         $this->productMetadata = $productMetadata;
+        $this->composerJsonFinder = $composerJsonFinder;
     }
 
     /**
@@ -96,6 +105,8 @@ class Convert extends Command
         InputInterface $input,
         OutputInterface $output
     ) {
+        $this->getInstalledPackages();
+
         $this->input = $input;
         $this->output = $output;
 
@@ -142,8 +153,8 @@ class Convert extends Command
                 && $patchData['type']
                 && $patchData['type'] !== QualityCollector::PROP_DEPRECATED
             ) {
+                list($patchData['file'], $patchData['description']) = $this->getInfoFromPatchesJson($patchData['patchId']);
                 $patchData['affected_components'] = $this->getAffectedComponents($patch);
-                list($patchData['file'], $patchData['description']) = $this->getFileAndDescriptionFromPatchesJson($patchData['patchId']);
                 $this->addPatchDataToOutputArray($patchData);
             }
         }
@@ -182,8 +193,8 @@ class Convert extends Command
     protected function getPatchId(string $patch): ?string
     {
         preg_match('/((BUNDLE|MDVA|MC)-[0-9]{5}(-V[0-9]{1})?)/', $patch, $matches);
-        if (isset($matches[0])) {
-            return $matches[0];
+        if ($matches && count($matches)) {
+            return reset($matches);
         }
         return null;
     }
@@ -224,41 +235,29 @@ class Convert extends Command
     }
 
     /**
-     * @param string $patch
-     * @return array
-     */
-    private function getAffectedComponents(string $patch): array
-    {
-        preg_match_all('/(magento\/[a-z\-]*)/', $patch, $components);
-        if (isset($components[0])) {
-            return $components[0];
-        }
-        return [];
-    }
-
-    /**
      * @param string|null $patchId
      * @return string[]
      */
-    private function getFileAndDescriptionFromPatchesJson(?string $patchId): array
+    private function getInfoFromPatchesJson(?string $patchId): array
     {
         if (isset($this->patchesJsonContent[$patchId])) {
-            $packageKeys = array_keys($this->patchesJsonContent[$patchId]);
-            $package = $packageKeys[0];
+            $packageKeys = $this->filterPackageKeys(array_keys($this->patchesJsonContent[$patchId]));
+            $package = reset($packageKeys);
             $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
-            $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
-            $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
+            $constraint = $this->getValidConstraint($patchId, $package, $description);
+            $file = $this->patchesJsonContent[$patchId][$package][$description][$constraint]['file'];
 
             // See if the file found matches for the current Magento edition (Community or Commerce)
             // If it doesn't match, see if there is another patch listed for the other edition
             if (substr($file, 0, strlen($this->getEdition())) !== $this->getEdition()) {
-                $package = $packageKeys[1];
+                $package = next($packageKeys);
                 $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
-                $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
-                $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
+                $constraint = $this->getValidConstraint($patchId, $package, $description);
+                $file = $this->patchesJsonContent[$patchId][$package][$description][$constraint]['file'];
             }
             $file = './vendor/magento/quality-patches/patches/' . $file;
-            return [$file, $description];
+
+            return [$file, $description, $packageKeys];
         }
         return [];
     }
@@ -270,7 +269,7 @@ class Convert extends Command
     {
         $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['description'];
         if (count($patchData['affected_components']) === 1) {
-            $module = $patchData['affected_components'][0];
+            $module = reset($patchData['affected_components']);
             if (!isset($this->outputArray[$module])) {
                 $this->outputArray[$module] = [];
             }
@@ -370,5 +369,63 @@ class Convert extends Command
     private function getEdition(): string
     {
         return $this->productMetadata->getEdition() === 'Community' ? 'os' : 'commerce';
+    }
+
+    /**
+     * @param string|null $patchId
+     * @param $package
+     * @param int|null $description
+     * @return false|mixed
+     */
+    private function getValidConstraint($patchId, $package, $description)
+    {
+        $versionConstraints = array_keys($this->patchesJsonContent[$patchId][$package][$description]);
+        $constraint = false;
+        foreach ($versionConstraints as $constraint) {
+            if (\Composer\Semver\Semver::satisfies($this->installedPackages[$package]['version'], $constraint)) {
+                break;
+            }
+        }
+        return $constraint;
+    }
+
+    /**
+     * Filter out package keys of packages that are not installed
+     *
+     * Logic copied from \Magento\Framework\App\ProductMetadata::getComposerInformation
+     *
+     * @param $packageKeys
+     * @return array
+     */
+    private function filterPackageKeys($packageKeys)
+    {
+        $packageKeys = array_intersect($packageKeys, array_keys($this->installedPackages));
+
+        return $packageKeys;
+    }
+
+    /**
+     *
+     */
+    private function getInstalledPackages()
+    {
+        $directoryList = new DirectoryList(BP);
+        $composerFactory = new ComposerFactory($directoryList, $this->composerJsonFinder);
+        $composerInformation = new ComposerInformation($composerFactory);
+
+        $this->installedPackages = $composerInformation->getInstalledMagentoPackages();
+    }
+
+    /**
+     * @param string $patch
+     * @return array
+     */
+    private function getAffectedComponents(string $patch): array
+    {
+        preg_match_all('/(magento\/[a-z\-]*)/', $patch, $components);
+        if (isset($components[0])) {
+            return $components[0];
+        }
+        return [];
     }
 }
