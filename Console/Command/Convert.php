@@ -7,7 +7,7 @@ declare(strict_types=1);
 
 namespace Elgentos\ComposerQualityPatches\Console\Command;
 
-use Magento\CloudPatches\Patch\Collector\QualityCollector;
+use \Magento\CloudPatches\Patch\Collector\SupportCollector;
 use Magento\CloudPatches\Patch\Data\PatchInterface;
 use Magento\CloudPatches\Patch\Status\StatusPool;
 use Magento\Framework\App\Filesystem\DirectoryList;
@@ -60,7 +60,7 @@ class Convert extends Command
     /**
      * @var mixed
      */
-    protected $patchesJsonContent;
+    protected $supportPatchesJsonContent;
     /**
      * @var array
      */
@@ -105,7 +105,9 @@ class Convert extends Command
         $output = $process->getOutput();
         $lines = explode(PHP_EOL, $output);
 
-        $this->patchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/patches.json'));
+        $this->supportPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/support-patches.json'));
+        $this->communityPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/community-patches.json'));
+        $this->patchesJsonContent = array_merge($this->supportPatchesJsonContent, $this->communityPatchesJsonContent);
 
         $patches = [];
         $patch = '';
@@ -140,10 +142,10 @@ class Convert extends Command
                 && $patchData['status']
                 && $patchData['status'] !== StatusPool::NA
                 && $patchData['type']
-                && $patchData['type'] !== QualityCollector::PROP_DEPRECATED
+                && $patchData['type'] !== SupportCollector::PROP_DEPRECATED
             ) {
                 $patchData['affected_components'] = $this->getAffectedComponents($patch);
-                list($patchData['file'], $patchData['description']) = $this->getFileAndDescriptionFromPatchesJson($patchData['patchId']);
+                list($patchData['file'], $patchData['title']) = $this->getFileAndTitleFromPatchesJson($patchData['patchId']);
                 $this->addPatchDataToOutputArray($patchData);
             }
         }
@@ -210,7 +212,7 @@ class Convert extends Command
     private function getType(string $patch): ?string
     {
         $types = [
-            QualityCollector::PROP_DEPRECATED,
+            SupportCollector::PROP_DEPRECATED,
             PatchInterface::TYPE_OPTIONAL,
             PatchInterface::TYPE_REQUIRED,
             PatchInterface::TYPE_CUSTOM,
@@ -240,25 +242,16 @@ class Convert extends Command
      * @param string|null $patchId
      * @return string[]
      */
-    private function getFileAndDescriptionFromPatchesJson(?string $patchId): array
+    private function getFileAndTitleFromPatchesJson(?string $patchId): array
     {
         if (isset($this->patchesJsonContent[$patchId])) {
-            $packageKeys = array_keys($this->patchesJsonContent[$patchId]);
+            $title = $this->patchesJsonContent[$patchId]['title'];
+            $packageKeys = array_keys($this->patchesJsonContent[$patchId]['packages']);
             $package = $packageKeys[0];
-            $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
-            $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
-            $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
-
-            // See if the file found matches for the current Magento edition (Community or Commerce)
-            // If it doesn't match, see if there is another patch listed for the other edition
-            if (substr($file, 0, strlen($this->getEdition())) !== $this->getEdition()) {
-                $package = $packageKeys[1];
-                $description = array_key_first($this->patchesJsonContent[$patchId][$package]);
-                $versionConstraint = array_key_first($this->patchesJsonContent[$patchId][$package][$description]);
-                $file = $this->patchesJsonContent[$patchId][$package][$description][$versionConstraint]['file'];
-            }
+            $versionConstraint = array_key_first($this->patchesJsonContent[$patchId]['packages'][$package]);
+            $file = $this->patchesJsonContent[$patchId]['packages'][$package][$versionConstraint]['file'];
             $file = './vendor/magento/quality-patches/patches/' . $file;
-            return [$file, $description];
+            return [$file, $title];
         }
         return [];
     }
@@ -268,7 +261,7 @@ class Convert extends Command
      */
     private function addPatchDataToOutputArray(array $patchData)
     {
-        $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['description'];
+        $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['title'];
         if (count($patchData['affected_components']) === 1) {
             $module = $patchData['affected_components'][0];
             if (!isset($this->outputArray[$module])) {
