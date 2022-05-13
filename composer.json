@@ -2,9 +2,8 @@
     "name": "elgentos/magento2-composer-quality-patches",
     "description": "Converts Magento's Quality Patches to a JSON format to be used with vaimo/composer-patches",
     "require": {
-        "php": "^7.3",
         "magento/magento-composer-installer": "*",
-        "magento/quality-patches": "1.0.26",
+        "magento/quality-patches": "^1.1.14",
         "vaimo/composer-patches": "*"
     },
     "type": "magento2-module",
