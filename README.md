@@ -12,13 +12,11 @@ Some patches will give a "Hmm...  Ignoring the trailing garbage." warnings, caus
 
 ```json
 {
-  ...
     "extra": {
         "patcher": {
             "graceful": true
         }
     }
-  ...
 }
 ```
 
@@ -26,7 +24,6 @@ Some patches will give a "Hmm...  Ignoring the trailing garbage." warnings, caus
 
 ```json
 {
-  ...
     "scripts": {
         "post-install-cmd": [
             "# Remove double new lines from patches to make vaimo/composer-patches process them correctly",
@@ -35,7 +32,6 @@ Some patches will give a "Hmm...  Ignoring the trailing garbage." warnings, caus
             "composer2 patch:apply --no-scripts"
         ]
     }
-  ...
 }
 ```
 
