@@ -102,11 +102,11 @@ class Convert extends Command
         $this->input = $input;
         $this->output = $output;
 
-        $process = new Process(['./vendor/bin/magento-patches','status']);
+        $process = new Process(['./vendor/bin/magento-patches', 'status', '--format=json']);
         $process->mustRun();
 
         $patches = $process->getOutput();
-        print_r($patches);exit;
+        $patches = json_decode($patches, true);
 
         $this->supportPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/support-patches.json'));
         $this->communityPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/community-patches.json'));
@@ -114,22 +114,17 @@ class Convert extends Command
 
         // Process patches into uniform array
         foreach ($patches as $patch) {
-            $patchData = [];
-
-            // Get patch ID
-            $patchData['patchId'] = $this->getPatchId($patch);
-            $patchData['status'] = $this->getStatus($patch);
-            $patchData['type'] = $this->getType($patch);
+            $patch['type'] = $this->getType($patch['Details']);
             if (
-                $patchData['patchId']
-                && $patchData['status']
-                && $patchData['status'] !== StatusPool::NA
-                && $patchData['type']
-                && $patchData['type'] !== SupportCollector::PROP_DEPRECATED
+                $patch['Id']
+                && $patch['Status']
+                && $patch['Status'] !== StatusPool::NA
+                && $patch['type']
+                && $patch['type'] !== SupportCollector::PROP_DEPRECATED
             ) {
-                $patchData['affected_components'] = $this->getAffectedComponents($patch);
-                [$patchData['file'], $patchData['title']] = $this->getFileAndTitleFromPatchesJson($patchData['patchId']);
-                $this->addPatchDataToOutputArray($patchData);
+                $patch['affected_components'] = $this->getAffectedComponents($patch['Details']);
+                [$patch['file'], $patch['title']] = $this->getFileAndTitleFromPatchesJson($patch['Id']);
+                $this->addPatchDataToOutputArray($patch);
             }
         }
 
@@ -244,7 +239,7 @@ class Convert extends Command
      */
     private function addPatchDataToOutputArray(array $patchData)
     {
-        $patchName = 'Quality Patch ' . $patchData['patchId'] . ' ' . $patchData['title'];
+        $patchName = 'Quality Patch ' . $patchData['Id'] . ' ' . $patchData['title'];
         if (count($patchData['affected_components']) === 1) {
             $module = $patchData['affected_components'][0];
             if (!isset($this->outputArray[$module])) {
