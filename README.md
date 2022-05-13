@@ -35,6 +35,8 @@ Some patches will give a "Hmm...  Ignoring the trailing garbage." warnings, caus
 }
 ```
 
+We prefer option 2 because when using option 1, other patches that fail for other reasons will not stop our deployment.
+
 ## Install & Usage
 ```bash
 composer require elgentos/magento2-composer-quality-patches 
