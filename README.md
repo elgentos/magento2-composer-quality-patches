@@ -52,12 +52,10 @@ composer patch:apply
 
 ```json
 {
-    ...
     "scripts": {
         "post-install-cmd": [
             "./vendor/bin/magento-patches status | grep 'Not applied' | cut -d ' ' -f2 | xargs ./vendor/bin/magento-patches apply"
         ]
     }
-    ...
 }
 ```
