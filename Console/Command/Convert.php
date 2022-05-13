@@ -7,11 +7,14 @@ declare(strict_types=1);
 
 namespace Elgentos\ComposerQualityPatches\Console\Command;
 
+use Magento\CloudPatches\Command\Process\ShowStatus;
 use \Magento\CloudPatches\Patch\Collector\SupportCollector;
 use Magento\CloudPatches\Patch\Data\PatchInterface;
 use Magento\CloudPatches\Patch\Status\StatusPool;
 use Magento\Framework\App\Filesystem\DirectoryList;
+use Magento\Framework\App\ObjectManager;
 use Magento\Framework\App\ProductMetadata;
+use Magento\Framework\App\ResourceConnection;
 use Magento\Framework\Exception\FileSystemException;
 use Magento\Framework\Filesystem;
 use Magento\Framework\Serialize\Serializer\Json;
@@ -102,32 +105,12 @@ class Convert extends Command
         $process = new Process(['./vendor/bin/magento-patches','status']);
         $process->mustRun();
 
-        $output = $process->getOutput();
-        $lines = explode(PHP_EOL, $output);
+        $patches = $process->getOutput();
+        print_r($patches);exit;
 
         $this->supportPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/support-patches.json'));
         $this->communityPatchesJsonContent = $this->json->unserialize($this->filesystem->getDirectoryRead(DirectoryList::ROOT)->readFile('vendor/magento/quality-patches/community-patches.json'));
         $this->patchesJsonContent = array_merge($this->supportPatchesJsonContent, $this->communityPatchesJsonContent);
-
-        $patches = [];
-        $patch = '';
-        $firstLineSeen = false;
-
-        // Gather patch blocks
-        foreach($lines as $line) {
-            if (stripos($line, 'Id') !== false && stripos($line, 'Title') !== false) {
-                $firstLineSeen = true;
-                continue;
-            }
-            if ($firstLineSeen) {
-                $patch .= $line . PHP_EOL;
-                if (stripos($line, '─────────────') !== false) {
-                    // New patch
-                    $patches[] = $patch;
-                    $patch = '';
-                }
-            }
-        }
 
         // Process patches into uniform array
         foreach ($patches as $patch) {
@@ -145,7 +128,7 @@ class Convert extends Command
                 && $patchData['type'] !== SupportCollector::PROP_DEPRECATED
             ) {
                 $patchData['affected_components'] = $this->getAffectedComponents($patch);
-                list($patchData['file'], $patchData['title']) = $this->getFileAndTitleFromPatchesJson($patchData['patchId']);
+                [$patchData['file'], $patchData['title']] = $this->getFileAndTitleFromPatchesJson($patchData['patchId']);
                 $this->addPatchDataToOutputArray($patchData);
             }
         }
