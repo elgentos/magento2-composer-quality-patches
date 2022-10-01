@@ -54,7 +54,7 @@ composer patch:apply
 {
     "scripts": {
         "post-install-cmd": [
-            "./vendor/bin/magento-patches status | grep 'Not applied' | cut -d ' ' -f2 | xargs ./vendor/bin/magento-patches apply"
+            "./vendor/bin/magento-patches status | grep 'Not applied' | cut -d ' ' -f2 | xargs --no-run-if-empty ./vendor/bin/magento-patches apply"
         ]
     }
 }
